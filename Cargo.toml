@@ -1,0 +1,5 @@
+[package]
+
+name = "rustygraphs"
+version = "0.0.1"
+authors = ["Prasoon Shukla <prasoon92.iitr@gmail.com>"]
