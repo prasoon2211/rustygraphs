@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::vec::Vec;
 
 struct Graph<'a> {
-    nodes: Vec<Node<'a>,
-    adj_list: HashMap<&'a Node, Vec<&'a Node>>,
+    nodes: Vec<Node>,
+    adj_list: HashMap<*mut Node, Vec<*mut Node>>,
     name: String,
 }
 
@@ -17,33 +17,41 @@ impl<'a> Graph<'a> {
     fn new() -> Graph<'a> {
         // Create an empty Graph
         Graph {
-            nodes: Vec::<Node>::new(),
-            adj_list: HashMap::<&'a Node, Vec<&'a Node>>::new(),
+            nodes: Vec::new(),
+            adj_list: HashMap::new(),
             name: String::new(),
         }
     }
 
-    fn name(&self) -> &'a String {
+    fn name(&self) -> &String {
         // Return name of graph
-        &self.name;
+        return &self.name;
     }
 
-    fn add_node(&mut self, node: Node) -> Graph<'a> {
+    fn add_node(&mut self, mut node: Node) {
         // Add a single node to graph
         // Check for repeated nodes. If exists, do nothing.
         if self.has_node(&node) {
-            return *self;
+            return;
         }
         // Add node
-        self.adj_list.insert(&node, Vec::new());
+        self.adj_list.insert(&mut node, Vec::new());
         self.nodes.push(node);
-
-        return *self;
     }
 
-    fn add_edge(&mut self, node1: Node, node2: Node) -> Graph<'a> {
+    fn add_edge(&mut self, mut node1: Node, mut node2: Node) {
         // Add a single edge between two nodes
         // Nodes may or may not be already added.
+
+        // Check if edge is already present
+        if self.has_edge(&mut node1, &mut node2) {
+            return;
+        }
+
+        // Create raw ptrs
+        let node1_ptr: *mut Node = &mut node1;
+        let node2_ptr: *mut Node = &mut node2;
+
         // Check if nodes exist already
         if !self.has_node(&node1) {
             self.add_node(node1);
@@ -53,15 +61,9 @@ impl<'a> Graph<'a> {
         }
 
         // Add edges
-        // Check if edge is already present
-        if self.has_edge(&node1, &node2) {
-            return *self;
-        }
         // Now we add the edge twice - 1-2 and 2-1
-        self.adj_list[&node1].push(&node2);
-        self.adj_list[&node2].push(&node1);
-
-        return *self;
+        self.adj_list[node1_ptr].push(node2_ptr);
+        self.adj_list[node2_ptr].push(node1_ptr);
     }
 
     // Helpers from here on out
@@ -72,7 +74,7 @@ impl<'a> Graph<'a> {
         return false;
     }
 
-    fn has_edge(&self, node1: &'a Node, node2: &'a Node) -> bool {
+    fn has_edge(&self, node1: *mut Node, node2: *mut Node) -> bool {
         if self.adj_list[node1].contains(&node2) {
             return true;
         }
