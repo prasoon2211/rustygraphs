@@ -2,7 +2,8 @@
 // mod converters;
 // mod exceptions;
 // mod generators;
-mod graphs;
+pub mod graphs;
+pub mod errors;
 // mod linalg;
 // mod relabel;
 // mod readwrite;
