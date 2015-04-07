@@ -4,9 +4,10 @@ use super::super::errors::GraphError;
 use std::fmt;
 use std::fmt::Show;
 
-pub struct Graph<'a> {
-    nodes: HashMap<Node, HashMap<String, String>>,
-    adj_list: HashMap<*mut Node, Vec<*mut Node>>,
+pub struct Graph {
+    nodes: Vec<Node>,
+    attr_list: HashMap<uint, HashMap<String, String>>,
+    adj_list: HashMap<uint, Vec<uint>>,
     name: String,
 }
 
@@ -16,16 +17,17 @@ pub enum Node {
     Int(int),
 }
 
-pub struct Edge(*mut Node, *mut Node);
+struct Edge(uint, uint);
 
 // Note that changing the nodes Vec physically in any way
 // must be accompanied by managing the raw pointers within
 // the adj_list of the Graph.
-impl<'a> Graph<'a> {
-    pub fn new() -> Graph<'a> {
+impl Graph {
+    pub fn new() -> Graph {
         // Create an empty Graph
         Graph {
-            nodes: HashMap::new(),
+            nodes: Vec::new(),
+            attr_list: HashMap::new(),
             adj_list: HashMap::new(),
             name: String::new(),
         }
@@ -36,27 +38,40 @@ impl<'a> Graph<'a> {
         return &self.name;
     }
 
-    pub fn add_node(&mut self, mut node: Node) {
-        if self.nodes.contains_key(&node) {
-            return;
+    pub fn add_node(&mut self, node: Node) -> &Node {
+        if self.has_node(&node) {
+            return self.existing_node(&node);
         }
-        self.adj_list.insert(&mut node, Vec::new());
-        self.nodes.insert(node, HashMap::new());
+
+        self.nodes.push(node);
+        let node_ref = self.last_node();
+
+        // internally Vec::len returns self.len (struct field)
+        self.adj_list.insert(self.nodes.len(), Vec::new());
+        self.attr_list.insert(self.nodes.len(), HashMap::new());
+
+        return node_ref;
     }
 
-    pub fn add_nodes_multiple(&mut self, nodes: Vec<Node>) {
+    pub fn add_nodes_multiple(&mut self, nodes: Vec<Node>) -> Vec<&Node> {
         // Add several nodes at once.
+        let node_refs = Vec::<&Node>::new();
         for node in nodes.into_iter() {
-            self.add_node(node);
+            node_refs.push(self.add_node(node));
         }
+        return node_refs;
     }
 
     pub fn set_node_attr(&mut self, node: &Node,
                      node_attr: HashMap<String, String>) {
-        self.nodes.insert(node.clone(), node_attr);
+        if !self.has_node(node) {
+            panic!("Node does not exist in graph.");
+        }
+        let index = self.get_index(node);
+        self.attr_list.insert(index, node_attr);
     }
 
-    pub fn remove_node(&mut self, node: &mut Node) -> Result<Node, GraphError> {
+    pub fn remove_node(&mut self, node: &Node) -> Result<Node, GraphError> {
         // Check for existence and remove the given node.
         // All edges connected to this node are removed, too
 
@@ -64,29 +79,29 @@ impl<'a> Graph<'a> {
         // We do these three things:
         // 1. Remove edges from the adj_list
         // 2. Remove (swap_remove) the actual Node from nodes
-        // 3. Update the pointers
+        // 3. Remove attr_dict.
+        // 4. Update the pointers
 
         // We're using raw pointers so we need to be careful as Rust
         // won't save us if we mess up.
 
-        if !self.nodes.contains_key(node) {
+        if !self.has_node(node) {
             return Err(GraphError::NodeNotFound);
         }
 
-        let raw_node: *mut Node = node;
+        let rm_node_index = self.get_index(node);
         let mut index: uint;
         // clone so that double borrow doesn't occur
-        let conn_nodes = self.adj_list[raw_node].clone();
-        // type(conn_node) == &Vec<*mut Node>
+        let mut conn_nodes = self.adj_list[rm_node_index].clone();
+        // type(conn_node) == &Vec<uint>
 
         for conn_node in conn_nodes.iter() {
-            // type(conn_node) == &*mut Node
-            // We can do this next step only because of the raw pointer
+            // type(conn_node) == &uint
             let nodes_vec = &mut self.adj_list[*conn_node];
             // Get index of the node to be removed
             index = 0;
-            for node_ref in nodes_vec.iter() {
-                if *node_ref == raw_node {
+            for node_ref_index in nodes_vec.iter() {
+                if *node_ref_index == rm_node_index {
                     break;
                 }
                 index += 1;
@@ -94,50 +109,45 @@ impl<'a> Graph<'a> {
             nodes_vec.swap_remove(index);
         }
         // Remove the key to node in adj_list
-        self.adj_list.remove(&raw_node);
+        self.adj_list.remove(&rm_node_index);
 
         // Now remove the actual node
-        let ret_node = node.clone();
-        self.nodes.remove(node);
+        let ret_node: Node;
+        match self.nodes.swap_remove(rm_node_index) {
+            Some(x) => { ret_node = x; }
+            None => { panic!("Shouldn't reach here!"); }
+        };
 
-        // // Get the raw ptr to the last node since it'll go in the
-        // // place of the removed node
-        // // Extra var because rust won't let me put the expr directly in []
-        // let len_nodes = self.nodes.len();
-        // let raw_last_node: *mut Node = &mut self.nodes[len_nodes];
-        // let ret_node: Node;
-        // match self.nodes.swap_remove(index) {
-        //     Some(v) => {
-        //         ret_node = v;
-        //     }
-        //     None => {
-        //         return Err(GraphError::CannotRemoveNode);
-        //     }
-        // };
+        // Change all of last node's index to rm_node_index
+        // (See def of swap_remove)
+        let last_node_index = self.nodes.len() + 1; // since one node was removed
+        // Wherever `last_node_index` occurs, replace it with `rm_node_index`
 
-        // // Node removed from self.nodes. Now manage the raw pointers
-        // // Take all raw ptrs to the last node and make them point to
-        // // the replaces node. (Vec::swap_remove)
-        // conn_nodes = self.adj_list[raw_last_node].clone();
-        // let raw_new_node_addr: *mut Node = &mut self.nodes[index];
+        conn_nodes = self.adj_list[last_node_index].clone();
 
-        // for conn_node in conn_nodes.iter() {
-        //     let nodes_vec = &mut self.adj_list[*conn_node];
-        //     // Get index of the node to be corrected
-        //     index = 0;
-        //     for node_ref in nodes_vec.iter() {
-        //         if *node_ref == raw_last_node {
-        //             break;
-        //         }
-        //         index += 1;
-        //     }
-        //     nodes_vec[index] = raw_new_node_addr;
-        // }
-        // // ...and, all done! Now, we return the removed node.
+        for conn_node in conn_nodes.iter() {
+            let nodes_vec = &mut self.adj_list[*conn_node];
+            // Get index of the node to be corrected
+            index = 0;
+            for node_ref in nodes_vec.iter() {
+                if *node_ref == last_node_index {
+                    break;
+                }
+                index += 1;
+            }
+            nodes_vec[index] = rm_node_index;
+        }
+
+        self.adj_list.remove(&last_node_index);
+        self.adj_list.insert(rm_node_index, conn_nodes);
+
+        // Remove the node from attr_list
+        self.attr_list.remove(&rm_node_index);
+        // ...and, all done! Now, we return the removed node.
         return Ok(ret_node);
     }
 
-    pub fn add_edge(&mut self, node1: &mut Node, node2: &mut Node) {
+    pub fn add_edge(&mut self, node1: &Node, node2: &Node) {
         // Add a single edge between two nodes
         // Nodes may or may not be already added.
 
@@ -146,65 +156,75 @@ impl<'a> Graph<'a> {
             return;
         }
 
-        // Create raw ptrs
-        let mut node1_ptr: *mut Node = node1;
-        let mut node2_ptr: *mut Node = node2;
-
         // Check if nodes exist already
-        if !self.nodes.contains_key(node1) {
-            let mut clone_node1: Node = node1.clone();
-            node1_ptr = &mut clone_node1 as *mut Node;
-            self.add_node(clone_node1);
+        if !self.has_node(node1) {
+            let clone_node1 = node1.clone();
+            node1 = self.add_node(clone_node1);
         }
-        if !self.nodes.contains_key(node2) {
-            let mut clone_node2 = node2.clone();
-            node2_ptr = &mut clone_node2 as *mut Node;
-            self.add_node(clone_node2);
+
+        if !self.has_node(node2) {
+            let clone_node2 = node2.clone();
+            node2 = self.add_node(clone_node2);
         }
+        let node1_index = self.get_index(node1);
+        let node2_index = self.get_index(node2);
 
         // Add edges
         // Now we add the edge twice - 1-2 and 2-1
-        self.adj_list[node1_ptr].push(node2_ptr);
-        self.adj_list[node2_ptr].push(node1_ptr);
-    }
-
-    pub fn edges(&self) -> Vec<Edge> {
-        // Return all edges of a Graph
-        let mut edge_vec = Vec::<Edge>::new();
-        let mut visited = Vec::<*mut Node>::new();
-        for (node, nbrs) in self.adj_list.iter() {
-            for nbr in nbrs.iter() { // methods work on refs, too
-                // nbr is of type &*mut Node
-                if !visited.contains(nbr) {
-                    edge_vec.push(Edge(*node, *nbr)); // *mut is copyable
-                }
-            }
-            visited.push(*node); // *mut is copyable
-        }
-        return edge_vec;
+        self.adj_list[node1_index].push(node2_index);
+        self.adj_list[node2_index].push(node1_index);
     }
 
     // Helpers from here on out
     // To be used internally only. No public API.
 
-    // fn get_index(&self, node: &Node) -> Result<uint, GraphError> {
-    //     // All nodes are unique which allows us to assign each node an index
-    //     // Run through the Vec to get the index
-    //     let mut index = 0;
-    //     for node_ref in self.nodes.iter() {
-    //         // node is a ref to an already exisitng node.
-    //         // we can thus match just the pointers
-    //         if node_ref == node {
-    //             return Ok(index);
-    //         }
-    //         index += 1;
-    //     }
-    //     return Err(GraphError::NodeNotFound);
-    // }
+    fn edges(&self) -> Vec<Edge> {
+        // Return all edges of a Graph
+        let mut edge_vec = Vec::<Edge>::new();
+        let mut visited = Vec::<uint>::new();
+        for (node, nbrs) in self.adj_list.iter() {
+            for nbr in nbrs.iter() { // methods work on refs, too
+                // nbr of type &uint
+                if !visited.contains(nbr) { // uint is copyable
+                    edge_vec.push(Edge(*node, *nbr));
+                }
+            }
+            visited.push(*node);
+        }
+        return edge_vec;
+    }
 
 
-    fn has_edge(&self, node1: *mut Node, node2: *mut Node) -> bool {
-        if self.adj_list[node1].contains(&node2) {
+    fn get_index(&self, node: &Node) -> uint {
+        // All nodes are unique which allows us to assign each node an index
+        // Run through the Vec to get the index
+        let mut index = 0;
+        for node_ref in self.nodes.iter() {
+            if *node_ref == *node {
+                return index;
+            }
+            index += 1;
+        }
+        // No node found. Node doesn't exist
+        // Since it is internal function, there should occur no such situation
+        // Panic.
+        panic!("Node does not exist.");
+    }
+
+
+    fn has_node(&self, node: &Node) -> bool {
+        for n in self.nodes.iter() {
+            if *n == *node {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    fn has_edge(&self, node1: &Node, node2: &Node) -> bool {
+        let n1_ind = self.get_index(node1);
+        let n2_ind = self.get_index(node2);
+        if self.adj_list[n1_ind].contains(&n2_ind) {
             return true;
         }
         return false;
@@ -217,15 +237,27 @@ impl<'a> Graph<'a> {
         };
         return node_name;
     }
+
+    fn existing_node(&self, node: &Node) -> &Node {
+        // Return ref to existing node
+        for n in self.nodes.iter() {
+            if *node == *n {
+                return n;
+            }
+        }
+        panic!("No such node.");
+    }
+
+    fn last_node(&self) -> &Node { &self.nodes[self.nodes.len()] }
 }
 
 
-impl<'a> Show for Graph<'a> {
+impl Show for Graph {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // Shows textual repr of Graph
         try!(write!(f, "{{ Nodes: "));
-        for key in self.nodes.keys() {
-            try!(write!(f, "{}, ", key));
+        for n in self.nodes.iter() {
+            try!(write!(f, "{}, ", n));
         }
         try!(writeln!(f, ""));
         try!(write!(f, "Edges: "));
